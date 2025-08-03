@@ -8,6 +8,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
+import sys
+
+# Force Chroma to use the newer sqlite from pysqlite3
+try:
+    __import__("pysqlite3")
+    sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
+except ImportError:
+    pass
 
 st.title("📚 RAG Agent with Critic")
 with st.sidebar:
