@@ -55,10 +55,11 @@ if uploaded_file:
     # QA prompt
     qa_prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", """You are a helpful assistant answering user queries using ONLY the provided context. 
-            If the answer cannot be found in the context, say so clearly. Keep answers concise (max 4 sentences).
-            Context:
-            {context}"""),
+            ("system", """You are a helpful assistant answering user queries using the provided context. 
+            If questions are direct and factual and if the answer cannot be found in the context, say so clearly. 
+            Keep answers concise (max 3 paragraphs). If questions are more general - Example - tell me about what 
+            the author thinks? or similar then you are allowed to make suggestions keeping the context in mind.
+            Context: {context}"""),
             ("human", "{input}")
         ]
     )
