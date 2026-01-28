@@ -17,6 +17,10 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 # ------------------------------------------------------------------
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 
+if not OPENAI_API_KEY:
+    st.error("OPENAI_API_KEY not found in Streamlit secrets")
+    st.stop()
+
 # ------------------------------------------------------------------
 # Force Chroma to use newer sqlite (Streamlit Cloud fix)
 # ------------------------------------------------------------------
