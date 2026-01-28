@@ -15,7 +15,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 # ------------------------------------------------------------------
 # OPENAI API KEY (TEMPORARY – replace with your real key)
 # ------------------------------------------------------------------
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 
 # ------------------------------------------------------------------
 # Force Chroma to use newer sqlite (Streamlit Cloud fix)
