@@ -143,19 +143,13 @@ if uploaded_file:
     query = st.text_input("Ask a question about the document")
 
     if query:
-        with st.spinner("Thinking..."):
-            answer_msg = rag_chain.invoke(query)
-            answer = answer_msg.content
+    with st.spinner("Thinking..."):
+        answer_msg = rag_chain.invoke(query)
+        answer = answer_msg.content
 
-            critic_msg = critic_chain.invoke(answer)
-            critique = critic_msg.content
+        # Critic runs silently (no UI output)
+        critic_chain.invoke(answer)
 
-        col1, col2 = st.columns(2)
+    st.subheader("🧠 Answer")
+    st.write(answer)
 
-        with col1:
-            st.subheader("🧠 Answer")
-            st.write(answer)
-
-        with col2:
-            st.subheader("🔍 Critic Review")
-            st.write(critique)
