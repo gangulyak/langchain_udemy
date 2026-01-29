@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import uuid
 import streamlit as st
 
 # ------------------------------------------------------------------
@@ -21,6 +22,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
+from chromadb.config import Settings
 
 # ------------------------------------------------------------------
 # Streamlit config
@@ -75,7 +77,7 @@ if uploaded_file:
     )
     chunks = splitter.split_documents(docs)
 
-    # ✅ FIX 1: Empty-chunk guard
+    # ✅ Empty-chunk guard
     if not chunks:
         st.error("❌ No readable text found in this document.")
         st.stop()
@@ -86,11 +88,16 @@ if uploaded_file:
     )
 
     # ---------------- Vector store ----------------
-    # ✅ FIX 2: Fresh Chroma collection per upload
+    # ✅ HARD FIX for Streamlit Cloud Chroma crashes
     vectorstore = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
-        collection_name=f"rag_{uploaded_file.name}"
+        collection_name=f"rag_{uuid.uuid4().hex}",
+        persist_directory=None,
+        client_settings=Settings(
+            anonymized_telemetry=False,
+            allow_reset=True
+        )
     )
 
     retriever = vectorstore.as_retriever(
