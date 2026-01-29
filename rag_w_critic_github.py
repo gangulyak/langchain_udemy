@@ -1,179 +1,157 @@
+# rag_w_critic_github.py
+
 import os
-import sys
 import tempfile
 import streamlit as st
 
-from langchain_openai import ChatOpenAI
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+# --- SQLite fix for Streamlit Cloud ---
+__import__("pysqlite3")
+import sys
+sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
+
+# --- LangChain imports ---
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.schema.runnable import RunnablePassthrough
 
 # ------------------------------------------------------------------
-# OPENAI API KEY (TEMPORARY – replace with your real key)
+# CONFIG
 # ------------------------------------------------------------------
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+st.set_page_config(page_title="RAG with Critic", layout="wide")
+st.title("📄 RAG + Critic (Local Embeddings, OpenRouter LLM)")
 
-if not OPENAI_API_KEY:
-    st.error("OPENAI_API_KEY not found in Streamlit secrets")
+# ------------------------------------------------------------------
+# API KEY (OpenRouter)
+# ------------------------------------------------------------------
+OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", None)
+
+if not OPENROUTER_API_KEY:
+    st.warning("⚠️ OPENROUTER_API_KEY not found in Streamlit secrets.")
     st.stop()
 
 # ------------------------------------------------------------------
-# Force Chroma to use newer sqlite (Streamlit Cloud fix)
-# ------------------------------------------------------------------
-try:
-    __import__("pysqlite3")
-    sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
-except ImportError:
-    pass
-
-# ------------------------------------------------------------------
-# UI
-# ------------------------------------------------------------------
-st.title("📚 RAG Agent with Critic")
-
-with st.sidebar:
-    st.title("Ask questions about policies")
-    st.success("Local embeddings enabled")
-    st.info("OpenAI used only for answers & critique")
-
-# ------------------------------------------------------------------
-# LLM (OpenAI only for generation)
+# LLM (OpenRouter)
 # ------------------------------------------------------------------
 llm = ChatOpenAI(
-    model="gpt-4o",
-    api_key=OPENAI_API_KEY
+    api_key=OPENROUTER_API_KEY,
+    base_url="https://openrouter.ai/api/v1",
+    model="anthropic/claude-3.5-sonnet",
+    temperature=0.2,
 )
 
 # ------------------------------------------------------------------
-# File Upload
+# Upload document
 # ------------------------------------------------------------------
 uploaded_file = st.file_uploader(
-    "Upload a PDF or Word document",
+    "Upload a document (PDF or DOCX)",
     type=["pdf", "docx"]
 )
 
 if uploaded_file:
-    # Save uploaded file to a temp location
-    with tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=f".{uploaded_file.name.split('.')[-1]}"
-    ) as tmp_file:
-        tmp_file.write(uploaded_file.read())
-        tmp_path = tmp_file.name
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(uploaded_file.read())
+        tmp_path = tmp.name
 
-    # ------------------------------------------------------------------
-    # Document Loader (SAFE – no unstructured)
-    # ------------------------------------------------------------------
+    # --- Load document ---
     if uploaded_file.name.endswith(".pdf"):
         loader = PyPDFLoader(tmp_path)
-    elif uploaded_file.name.endswith(".docx"):
-        loader = Docx2txtLoader(tmp_path)
     else:
-        st.error("Unsupported file type")
-        st.stop()
+        loader = Docx2txtLoader(tmp_path)
 
     docs = loader.load()
 
-    # ------------------------------------------------------------------
-    # Chunking
-    # ------------------------------------------------------------------
-    text_splitter = RecursiveCharacterTextSplitter(
+    # --- Split ---
+    splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
-        chunk_overlap=100
+        chunk_overlap=150
     )
-    chunks = text_splitter.split_documents(docs)
+    chunks = splitter.split_documents(docs)
 
-    # ------------------------------------------------------------------
-    # Local Embeddings (cached)
-    # ------------------------------------------------------------------
-    @st.cache_resource
-    def get_embeddings():
-        return HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+    # --- Local embeddings ---
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
 
-    embeddings = get_embeddings()
-    vector_store = Chroma.from_documents(chunks, embeddings)
+    # --- Vector store ---
+    vectorstore = Chroma.from_documents(
+        documents=chunks,
+        embedding=embeddings
+    )
 
-    # ------------------------------------------------------------------
-    # Retriever (MMR)
-    # ------------------------------------------------------------------
-    retriever = vector_store.as_retriever(
+    retriever = vectorstore.as_retriever(
         search_type="mmr",
-        search_kwargs={"k": 5, "lambda_mult": 0.5}
+        search_kwargs={"k": 4}
     )
 
     # ------------------------------------------------------------------
-    # QA Prompt
+    # PROMPTS
     # ------------------------------------------------------------------
-    qa_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a helpful assistant answering user queries using the provided context.
-If the answer cannot be found in the context, say so clearly.
-Keep answers concise (max 3 paragraphs).
+    rag_prompt = ChatPromptTemplate.from_template(
+        """
+You are a helpful assistant.
+Answer the question using ONLY the context below.
+If the answer is not in the context, say "I don't know".
 
 Context:
 {context}
+
+Question:
+{input}
 """
-            ),
-            ("human", "{input}")
-        ]
     )
 
-    qa_chain = create_stuff_documents_chain(llm, qa_prompt)
-    rag_chain = create_retrieval_chain(retriever, qa_chain)
+    critic_prompt = ChatPromptTemplate.from_template(
+        """
+You are a critical reviewer.
+Check if the answer below is fully supported by the context.
+If not, explain what is missing or incorrect.
 
-    # ------------------------------------------------------------------
-    # Critic Prompt
-    # ------------------------------------------------------------------
-    critic_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a critic that evaluates answers for clarity, factual grounding, and completeness.
-- If the answer is correct and clear, respond with: "APPROVED".
-- If incomplete or vague, provide actionable feedback.
-- If hallucinated, explain what is wrong and advise rechecking the context."""
-            ),
-            (
-                "human",
-                "Evaluate this answer for the question: '{question}'\nAnswer: {answer}"
-            )
-        ]
+Context:
+{context}
+
+Answer:
+{answer}
+"""
     )
 
-    critic_chain = critic_prompt | llm
+    # ------------------------------------------------------------------
+    # CHAINS
+    # ------------------------------------------------------------------
+    rag_chain = (
+        {"context": retriever, "input": RunnablePassthrough()}
+        | rag_prompt
+        | llm
+    )
+
+    critic_chain = (
+        {
+            "context": retriever,
+            "answer": RunnablePassthrough()
+        }
+        | critic_prompt
+        | llm
+    )
 
     # ------------------------------------------------------------------
-    # User Query
+    # UI
     # ------------------------------------------------------------------
     query = st.text_input("Ask a question about the document")
 
     if query:
-        response = rag_chain.invoke({"input": query})
-        answer = response["answer"]
+        with st.spinner("Thinking..."):
+            answer = rag_chain.invoke(query).content
+            critique = critic_chain.invoke(answer).content
 
-        critic_response = critic_chain.invoke(
-            {"question": query, "answer": answer}
-        )
-        critic_feedback = critic_response.content.strip()
+        col1, col2 = st.columns(2)
 
-        if "APPROVED" in critic_feedback:
-            st.success("✅ Final Answer")
+        with col1:
+            st.subheader("🧠 Answer")
             st.write(answer)
-        else:
-            st.warning("⚠️ Critic suggested improvements")
-            st.write(f"**Original Answer:** {answer}")
-            st.write(f"**Critic Feedback:** {critic_feedback}")
 
-            improved_response = rag_chain.invoke(
-                {"input": f"{query}\nCritic feedback: {critic_feedback}"}
-            )
-            st.info("🔄 Improved Answer (based on critic)")
-            st.write(improved_response["answer"])
+        with col2:
+            st.subheader("🔍 Critic Review")
+            st.write(critique)
