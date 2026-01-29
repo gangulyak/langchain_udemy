@@ -39,7 +39,7 @@ if not OPENROUTER_API_KEY:
 llm = ChatOpenAI(
     api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
-    model="anthropic/claude-3.5-sonnet",
+    model="mistralai/mistral-7b-instruct",
     temperature=0.2,
 )
 
@@ -143,7 +143,9 @@ Answer:
 
     if query:
         with st.spinner("Thinking..."):
-            answer = rag_chain.invoke(query).content
+            
+            result = rag_chain.invoke({"input": query})
+            answer = result["answer"]
             critique = critic_chain.invoke(answer).content
 
         col1, col2 = st.columns(2)
