@@ -1,40 +1,44 @@
 # rag_w_critic_github.py
 
 import os
+import sys
 import tempfile
 import streamlit as st
 
-# --- SQLite fix for Streamlit Cloud ---
+# ------------------------------------------------------------------
+# SQLite fix for Streamlit Cloud (Chroma requirement)
+# ------------------------------------------------------------------
 __import__("pysqlite3")
-import sys
 sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
 
-# --- LangChain imports ---
+# ------------------------------------------------------------------
+# LangChain imports
+# ------------------------------------------------------------------
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
-from langchain.schema.runnable import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough
 
 # ------------------------------------------------------------------
-# CONFIG
+# Streamlit config
 # ------------------------------------------------------------------
 st.set_page_config(page_title="RAG with Critic", layout="wide")
 st.title("📄 RAG + Critic (Local Embeddings, OpenRouter LLM)")
 
 # ------------------------------------------------------------------
-# API KEY (OpenRouter)
+# OpenRouter API Key
 # ------------------------------------------------------------------
-OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", None)
+OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY")
 
 if not OPENROUTER_API_KEY:
-    st.warning("⚠️ OPENROUTER_API_KEY not found in Streamlit secrets.")
+    st.error("OPENROUTER_API_KEY not found in Streamlit secrets.")
     st.stop()
 
 # ------------------------------------------------------------------
-# LLM (OpenRouter)
+# LLM (OpenRouter – OpenAI compatible)
 # ------------------------------------------------------------------
 llm = ChatOpenAI(
     api_key=OPENROUTER_API_KEY,
@@ -56,7 +60,7 @@ if uploaded_file:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
 
-    # --- Load document ---
+    # ---------------- Load document ----------------
     if uploaded_file.name.endswith(".pdf"):
         loader = PyPDFLoader(tmp_path)
     else:
@@ -64,19 +68,19 @@ if uploaded_file:
 
     docs = loader.load()
 
-    # --- Split ---
+    # ---------------- Split ----------------
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=150
     )
     chunks = splitter.split_documents(docs)
 
-    # --- Local embeddings ---
+    # ---------------- Local embeddings ----------------
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    # --- Vector store ---
+    # ---------------- Vector store ----------------
     vectorstore = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings
@@ -90,39 +94,36 @@ if uploaded_file:
     # ------------------------------------------------------------------
     # PROMPTS
     # ------------------------------------------------------------------
-    rag_prompt = ChatPromptTemplate.from_template(
-        """
-You are a helpful assistant.
-Answer the question using ONLY the context below.
-If the answer is not in the context, say "I don't know".
-
-Context:
-{context}
-
-Question:
-{input}
-"""
+    rag_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are a helpful assistant. Answer ONLY using the provided context. "
+                "If the answer is not in the context, say 'I don't know'."
+            ),
+            ("human", "Context:\n{context}\n\nQuestion:\n{input}")
+        ]
     )
 
-    critic_prompt = ChatPromptTemplate.from_template(
-        """
-You are a critical reviewer.
-Check if the answer below is fully supported by the context.
-If not, explain what is missing or incorrect.
-
-Context:
-{context}
-
-Answer:
-{answer}
-"""
+    critic_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are a critical reviewer. Evaluate whether the answer is fully "
+                "supported by the context. If correct, say APPROVED. Otherwise explain why."
+            ),
+            ("human", "Context:\n{context}\n\nAnswer:\n{answer}")
+        ]
     )
 
     # ------------------------------------------------------------------
-    # CHAINS
+    # CHAINS (CORRECT DATA FLOW)
     # ------------------------------------------------------------------
     rag_chain = (
-        {"context": retriever, "input": RunnablePassthrough()}
+        {
+            "context": retriever,
+            "input": RunnablePassthrough()
+        }
         | rag_prompt
         | llm
     )
@@ -143,10 +144,11 @@ Answer:
 
     if query:
         with st.spinner("Thinking..."):
-            
-            result = rag_chain.invoke({"input": query})
-            answer = result["answer"]
-            critique = critic_chain.invoke(answer).content
+            answer_msg = rag_chain.invoke(query)
+            answer = answer_msg.content
+
+            critic_msg = critic_chain.invoke(answer)
+            critique = critic_msg.content
 
         col1, col2 = st.columns(2)
 
