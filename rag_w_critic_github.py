@@ -25,8 +25,8 @@ from langchain_core.runnables import RunnablePassthrough
 # ------------------------------------------------------------------
 # Streamlit config
 # ------------------------------------------------------------------
-st.set_page_config(page_title="RAG with Critic", layout="wide")
-st.title("📄 RAG + Critic (Local Embeddings, OpenRouter LLM)")
+st.set_page_config(page_title="RAG", layout="wide")
+st.title("📄 RAG (Local Embeddings, OpenRouter LLM)")
 
 # ------------------------------------------------------------------
 # OpenRouter API Key
@@ -75,15 +75,22 @@ if uploaded_file:
     )
     chunks = splitter.split_documents(docs)
 
+    # ✅ FIX 1: Empty-chunk guard
+    if not chunks:
+        st.error("❌ No readable text found in this document.")
+        st.stop()
+
     # ---------------- Local embeddings ----------------
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
     # ---------------- Vector store ----------------
+    # ✅ FIX 2: Fresh Chroma collection per upload
     vectorstore = Chroma.from_documents(
         documents=chunks,
-        embedding=embeddings
+        embedding=embeddings,
+        collection_name=f"rag_{uploaded_file.name}"
     )
 
     retriever = vectorstore.as_retriever(
@@ -92,7 +99,7 @@ if uploaded_file:
     )
 
     # ------------------------------------------------------------------
-    # PROMPTS
+    # PROMPT
     # ------------------------------------------------------------------
     rag_prompt = ChatPromptTemplate.from_messages(
         [
@@ -105,19 +112,8 @@ if uploaded_file:
         ]
     )
 
-    critic_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are a critical reviewer. Evaluate whether the answer is fully "
-                "supported by the context. If correct, say APPROVED. Otherwise explain why."
-            ),
-            ("human", "Context:\n{context}\n\nAnswer:\n{answer}")
-        ]
-    )
-
     # ------------------------------------------------------------------
-    # CHAINS (CORRECT DATA FLOW)
+    # RAG CHAIN
     # ------------------------------------------------------------------
     rag_chain = (
         {
@@ -125,15 +121,6 @@ if uploaded_file:
             "input": RunnablePassthrough()
         }
         | rag_prompt
-        | llm
-    )
-
-    critic_chain = (
-        {
-            "context": retriever,
-            "answer": RunnablePassthrough()
-        }
-        | critic_prompt
         | llm
     )
 
@@ -147,9 +134,5 @@ if uploaded_file:
             answer_msg = rag_chain.invoke(query)
             answer = answer_msg.content
 
-            # Critic runs silently (no UI output)
-            critic_chain.invoke(answer)
-
         st.subheader("🧠 Answer")
         st.write(answer)
-
